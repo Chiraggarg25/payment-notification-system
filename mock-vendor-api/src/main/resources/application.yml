@@ -1,0 +1,22 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: mock-vendor-api
+  threads:
+    virtual:
+      enabled: true          # Java 21 virtual threads: TIMEOUT mode's sleep doesn't pin a platform thread
+
+mock:
+  vendors: udemy,amazon,coursera
+  timeout-delay: ${MOCK_TIMEOUT_DELAY:5s}           # > client read-timeout (2s)
+  flaky-failure-rate: ${MOCK_FLAKY_FAILURE_RATE:0.5}
+  max-recent: 50
+  max-remembered-keys: 10000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

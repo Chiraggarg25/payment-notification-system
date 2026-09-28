@@ -1,0 +1,15 @@
+# Single source of truth for the supported platforms, imported by every service via
+#   spring.config.import: classpath:platforms.yml
+# In docker-compose MOCK_VENDOR_BASE_URL=http://mock-vendor-api:8090 ; locally it defaults to localhost.
+platforms:
+  # One Kafka topic per platform: payment-notifications.udemy, payment-notifications.amazon, ...
+  # A slow/down platform can therefore never delay another platform's notifications.
+  topic-prefix: payment-notifications.
+  partitions-per-topic: 1        # key = platformId -> every record of a topic lands on the same partition anyway
+  dlt-suffix: .DLT              # dead-letter topic per platform: payment-notifications.udemy.DLT
+  connect-timeout: 1s
+  read-timeout: 2s
+  endpoints:
+    udemy: ${MOCK_VENDOR_BASE_URL:http://localhost:8090}/udemy/payments/notify
+    amazon: ${MOCK_VENDOR_BASE_URL:http://localhost:8090}/amazon/payments/notify
+    coursera: ${MOCK_VENDOR_BASE_URL:http://localhost:8090}/coursera/payments/notify

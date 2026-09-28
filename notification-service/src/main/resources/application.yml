@@ -1,0 +1,101 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: notification-service
+  config:
+    import: classpath:platforms.yml
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2s
+      connect-timeout: 2s
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    consumer:
+      group-id: notification-service     # overridden per platform: notification-service.{platformId}
+      auto-offset-reset: earliest
+      enable-auto-commit: false          # offsets are committed manually by the listener
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Worst case per record = 1s+2s+4s backoff + 4 x 2s read timeout ~ 15s.
+      # 10 records x 15s = 150s < max.poll.interval.ms (300s) -> no rebalance storms while a platform is down.
+      max-poll-records: 10
+      properties:
+        max.poll.interval.ms: 300000
+    listener:
+      ack-mode: manual_immediate
+    producer:                            # only used to publish to the dead-letter topics
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.block.ms: 5000
+        delivery.timeout.ms: 30000
+
+app:
+  kafka:
+    # One listener container + consumer group per platform topic (payment-notifications.{platformId}).
+    # Topic prefix / partitions / DLT suffix come from platforms.yml.
+    group-id-prefix: notification-service.
+    client-id-prefix: notification-
+    error-handler:                     # listener threw (Redis down, lock busy, invalid record)
+      initial-interval: 1s
+      multiplier: 2.0
+      max-interval: 30s
+      max-elapsed-time: ${KAFKA_ERROR_MAX_ELAPSED:5m}   # then -> {topic}.DLT and offset committed (bounded)
+  delivery:
+    first-retry-delay: ${FIRST_SWEEP_DELAY:10s}   # when the sweeper should first look at a parked event
+    lock-ttl: 60s                      # > worst-case delivery (4 x 3s timeouts + 7s backoff)
+    lock-wait: 10s                     # sweeper holds a lock for at most one HTTP call (~3s)
+    lock-poll-interval: 100ms
+  redis:
+    delivered-ttl: 7d                  # delivered records expire, failed ones are kept until handled
+    processed-event-ttl: 7d            # >= Kafka retention (default 7d) so a replay is always de-duplicated
+    scan-batch-size: 500
+
+resilience4j:
+  retry:
+    configs:
+      default:
+        max-attempts: 4                # 1 call + 3 retries
+        wait-duration: 1s
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2   # waits 1s -> 2s -> 4s (-> 8s -> 16s if you raise max-attempts)
+        exponential-max-wait-duration: 16s
+        retry-exceptions:
+          - com.paynotify.common.client.RetryableDeliveryException
+        ignore-exceptions:
+          - com.paynotify.common.client.NonRetryableDeliveryException
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - com.paynotify.common.client.RetryableDeliveryException
+        ignore-exceptions:
+          - com.paynotify.common.client.NonRetryableDeliveryException
+    # Instances are created per platform at startup from platforms.yml (ResilienceEventLogging).
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,circuitbreakers,circuitbreakerevents,retries,retryevents
+  health:
+    circuitbreakers:
+      enabled: true
+
+logging:
+  level:
+    org.apache.kafka: WARN

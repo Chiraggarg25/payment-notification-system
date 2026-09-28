@@ -1,0 +1,60 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: sweeper-service
+  config:
+    import: classpath:platforms.yml
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2s
+      connect-timeout: 2s
+
+app:
+  redis:
+    delivered-ttl: 7d
+    processed-event-ttl: 7d
+    scan-batch-size: 500
+  sweeper:
+    enabled: true
+    poll-interval-ms: ${SWEEPER_POLL_INTERVAL_MS:5000}
+    initial-delay-ms: 10000
+    batch-size: 50
+    max-attempts: ${SWEEPER_MAX_ATTEMPTS:5}     # real send attempts; after 5 failures -> DEAD
+    base-delay: ${SWEEPER_BASE_DELAY:10s}       # 10s, 20s, 40s, 80s between sweep attempts
+    multiplier: 2.0
+    max-delay: 10m
+    max-postpones: ${SWEEPER_MAX_POSTPONES:20}  # circuit-OPEN postpones (no attempt used) before DEAD
+    claim-lease: 60s                            # must be > sweep-timeout
+    sweep-timeout: 45s
+    lock-ttl: 30s                               # > connect-timeout + read-timeout of one call
+    lock-busy-delay: 5s
+    platform-parallelism: 4
+    max-list-limit: 1000
+
+# The sweeper protects platforms with its own per-platform circuit breaker (no inner retry:
+# the "retry" of the sweeper is the next sweep, spaced out with exponential backoff).
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 5
+        minimum-number-of-calls: 3
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 20s
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - com.paynotify.common.client.RetryableDeliveryException
+        ignore-exceptions:
+          - com.paynotify.common.client.NonRetryableDeliveryException
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,circuitbreakers

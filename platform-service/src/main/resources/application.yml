@@ -1,0 +1,35 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: platform-service
+  config:
+    import: classpath:platforms.yml
+  mvc:
+    async:
+      request-timeout: ${ASYNC_REQUEST_TIMEOUT:20s}   # > app.publish-timeout, safety net for async requests
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        # Idempotent producer: broker de-duplicates producer retries -> no duplicate events in the partition
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        linger.ms: 5
+        delivery.timeout.ms: 30000
+        request.timeout.ms: 10000
+        max.block.ms: 5000        # bound the time send() may block when broker metadata is unavailable
+
+app:
+  publish-timeout: ${PUBLISH_TIMEOUT:10s}      # wait for broker ack before answering 503
+  max-idempotency-key-length: 128
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
